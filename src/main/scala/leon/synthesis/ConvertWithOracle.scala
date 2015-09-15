@@ -8,34 +8,34 @@ import purescala.ExprOps._
 import purescala.Definitions._
 import purescala.Constructors._
 
+
+/** This phase converts a body with "withOracle{ .. }" into a choose construct:
+  * {{{
+  * def foo(a: T) = {
+  *   require(..a..)
+  *   withOracle { o =>
+  *     expr(a,o) ensuring { x => post(x) }
+  *   }
+  * }
+  * }}}
+  * gets converted into:
+  * {{{
+  * def foo(a: T) {
+  *   require(..a..)
+  *   val o = choose { (o) => {
+  *     val res = expr(a, o)
+  *     pred(res)
+  *   }
+  *   expr(a,o)
+  * } ensuring { res =>
+  *   pred(res)
+  * }
+  * }}}
+  */
 object ConvertWithOracle extends LeonPhase[Program, Program] {
   val name        = "Convert WithOracle to Choose"
   val description = "Convert WithOracle found in bodies to equivalent Choose"
 
-  /**
-   * This phase converts a body with "withOracle{ .. }" into a choose construct:
-   *
-   * def foo(a: T) = {
-   *   require(..a..)
-   *   withOracle { o =>
-   *     expr(a,o) ensuring { x => post(x) }
-   *   }
-   * }
-   *
-   * gets converted into:
-   *
-   * def foo(a: T) {
-   *   require(..a..)
-   *   val o = choose { (o) => {
-   *     val res = expr(a, o)
-   *     pred(res)
-   *   }
-   *   expr(a,o)
-   * } ensuring { res =>
-   *   pred(res)
-   * }
-   *
-   */
   def run(ctx: LeonContext)(pgm: Program): Program = {
 
     pgm.definedFunctions.foreach(fd => {

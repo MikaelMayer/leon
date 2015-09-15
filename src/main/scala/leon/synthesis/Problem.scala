@@ -11,7 +11,7 @@ import leon.purescala.Constructors._
 import leon.purescala.Extractors._
 import Witnesses._
 
-/** Defines a synthesis triple of the form:
+/** A synthesis triplet of the form:
   * ⟦ as ⟨ ws && pc | phi ⟩ xs ⟧
   * 
   * @param as The list of input identifiers so far

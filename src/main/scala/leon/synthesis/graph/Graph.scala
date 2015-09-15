@@ -9,7 +9,7 @@ import leon.utils.StreamUtils.cartesianProduct
 sealed class Graph(val cm: CostModel, problem: Problem) {
   val root = new RootNode(cm, problem)
 
-  // Returns closed/total
+  /** Returns (closed, total) */
   def getStats(from: Node = root): (Int, Int) = {
     val isClosed = from.isDeadEnd || from.isSolved
     val self = (if (isClosed) 1 else 0, 1)

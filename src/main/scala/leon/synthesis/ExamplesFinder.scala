@@ -18,6 +18,10 @@ import datagen._
 import solvers._
 import solvers.z3._
 
+/** Class to find examples from a program.
+  * 
+  * Typical usage: `new ExamplesFinder(leonContext, program).extractFrom**`
+  */
 class ExamplesFinder(ctx0: LeonContext, program: Program) {
 
   lazy val evaluator = new DefaultEvaluator(ctx, program)
@@ -68,7 +72,7 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
       ExamplesBank(Nil, Nil)
   }
 
-  // Extract examples from the passes found in expression
+  /** Extract examples from the passes found in expression */
   def extractFromProblem(p: Problem): ExamplesBank = {
     val testClusters = extractTestsOf(and(p.pc, p.phi))
 
@@ -104,6 +108,7 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
     ExamplesBank(examples.filter(isValidExample), Seq())
   }
 
+  /** Generates a set of input/output conditions for a given precondition */
   def generateForPC(ids: List[Identifier], pc: Expr, maxValid: Int = 400, maxEnumerated: Int = 1000): ExamplesBank = {
 
     val evaluator = new CodeGenEvaluator(ctx, program, CodeGenParams.default)
@@ -202,8 +207,8 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
   }
 
   /** 
-   * Check if two tests are compatible.
-   * Compatible should evaluate to the same value for the same identifier
+   * Checks if two tests are compatible.
+   * This should evaluate to the same value for the same identifier
    */
   private def isCompatible(m1: Map[Identifier, Expr], m2: Map[Identifier, Expr]) = {
     val ks = m1.keySet & m2.keySet
@@ -211,7 +216,7 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
   }
 
   /** 
-   * Merge tests t1 and t2 if they are compatible. Return m1 if not.
+   * Merges tests t1 and t2 if they are compatible. Returns m1 if not.
    */
   private def mergeTest(m1: Map[Identifier, Expr], m2: Map[Identifier, Expr]) = {
     if (!isCompatible(m1, m2)) {
@@ -222,10 +227,12 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
   }
 
   /**
-   * we now need to consolidate different clusters of compatible tests together
+   * Consolidates different clusters of compatible tests together
+   * {{{
    * t1: a->1, c->3
    * t2: a->1, b->4
    *   => a->1, b->4, c->3
+   * }}}
    */
   private def consolidateTests(ts: Set[Map[Identifier, Expr]]): Set[Map[Identifier, Expr]] = {
 
@@ -244,14 +251,15 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
    * Extract ids in ins/outs args, and compute corresponding extractors for values map
    *
    * Examples:
+   * {{{
    * (a,b) =>
    *     a -> _.1
    *     b -> _.2
-   *
    * Cons(a, Cons(b, c)) =>
    *     a -> _.head
    *     b -> _.tail.head
    *     c -> _.tail.tail
+   * }}}
    */
   private def extractIds(e: Expr): Seq[(Identifier, PartialFunction[Expr, Expr])] = e match {
     case Variable(id) =>
@@ -274,7 +282,7 @@ class ExamplesFinder(ctx0: LeonContext, program: Program) {
       Nil
   }
 
-  // Compose partial functions
+  /** Compose partial functions */
   private def andThen(pf1: PartialFunction[Expr, Expr], pf2: PartialFunction[Expr, Expr]): PartialFunction[Expr, Expr] = {
     Function.unlift(pf1.lift(_) flatMap pf2.lift)
   }

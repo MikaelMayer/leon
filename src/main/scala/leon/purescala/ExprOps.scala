@@ -1084,6 +1084,7 @@ object ExprOps {
   private def noCombiner(e: Expr, subCs: Seq[Unit]) = ()
   private def noTransformer[C](e: Expr, c: C) = (e, c)
 
+  /** Maps the expression with the function `pre` in a top-down way, and for each finished tree applies `post` on it (bottom-up) */
   def simpleTransform(pre: Expr => Expr, post: Expr => Expr)(expr: Expr) = {
     val newPre  = (e: Expr, c: Unit) => (pre(e), ())
     val newPost = (e: Expr, c: Unit) => (post(e), ())
@@ -1091,19 +1092,21 @@ object ExprOps {
     genericTransform[Unit](newPre, newPost, noCombiner)(())(expr)._1
   }
 
+  /** Maps the expressions with the function `pre` in a top-down way. */
   def simplePreTransform(pre: Expr => Expr)(expr: Expr) = {
     val newPre  = (e: Expr, c: Unit) => (pre(e), ())
 
     genericTransform[Unit](newPre, (_, _), noCombiner)(())(expr)._1
   }
 
+  /** Maps the expressions with the function `pre` in a top-down way. */
   def simplePostTransform(post: Expr => Expr)(expr: Expr) = {
     val newPost = (e: Expr, c: Unit) => (post(e), ())
 
     genericTransform[Unit]((e,c) => (e, None), newPost, noCombiner)(())(expr)._1
   }
 
-  /** Simplify If expressions when the branch is predetermined by the path condition */
+  /** Simplifies If expressions when the branch is predetermined by the path condition */
   def simplifyTautologies(sf: SolverFactory[Solver])(expr : Expr) : Expr = {
     val solver = SimpleSolverAPI(sf)
 

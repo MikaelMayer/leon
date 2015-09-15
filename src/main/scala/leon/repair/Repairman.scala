@@ -26,6 +26,17 @@ import synthesis.graph.{dotGenIds, DotGenerator}
 import rules._
 import grammars._
 
+/** A Repair manager.
+ *  
+ *  The [[leon.repair.Repairman.repair repair]] function discovers the tests associated to the post-conditions.
+ *  If there are failing tests, it calls the synthesizer to regenerate the expression.
+ *  
+ *  @param ctx0 A context
+ *  @param initProgram The program containing all related functions
+  * @param fd The function definition to repair
+  * @param verifTimeoutMs The timeout for verification in milliseconds. If not specified, its default value is 3000
+  * @param repairTimeoutMs The timeout in milliseconds. Default is infinite
+  *  */
 class Repairman(ctx0: LeonContext, initProgram: Program, fd: FunDef, verifTimeoutMs: Option[Long], repairTimeoutMs: Option[Long]) {
   implicit val ctx = ctx0
 
@@ -124,6 +135,7 @@ class Repairman(ctx0: LeonContext, initProgram: Program, fd: FunDef, verifTimeou
     }
   }
 
+  /** From a set of input-output examples, returns a synthesizer instance on a newly created [[leon.purescala.expressions.Choose Choose]] construct */
   def getSynthesizer(eb: ExamplesBank): Synthesizer = {
 
     val origBody = fd.body.get
@@ -162,6 +174,7 @@ class Repairman(ctx0: LeonContext, initProgram: Program, fd: FunDef, verifTimeou
     new Synthesizer(ctx, program, ci, soptions)
   }
 
+  /***/
   def getVerificationCExs(fd: FunDef): Seq[Example] = {
     val timeoutMs = verifTimeoutMs.getOrElse(3000L)
     val solverf = SolverFactory.getFromSettings(ctx, program).withTimeout(timeoutMs)

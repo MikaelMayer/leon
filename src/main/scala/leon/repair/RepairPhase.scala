@@ -6,6 +6,7 @@ package repair
 import purescala.Definitions._
 import purescala.DefOps._
 
+/** The repair phase. It list the available functions, and launches a [[leon.repair.Repairman repair manager]] on each of them. */
 object RepairPhase extends UnitPhase[Program]() {
   val name = "Repair"
   val description = "Repairing"

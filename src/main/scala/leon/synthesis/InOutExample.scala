@@ -6,6 +6,7 @@ package synthesis
 import purescala.Expressions._
 import leon.utils.ASCIIHelpers._
 
+/** An example of input(/output) that the function should satisfy */
 sealed abstract class Example {
   def ins: Seq[Expr]
 

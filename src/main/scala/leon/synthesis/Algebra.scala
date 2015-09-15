@@ -2,14 +2,13 @@
 
 package leon.synthesis
 
-/*
+/**
  * This provides some algebra/number theory functions, including operation such as true division,
  * GCD and LCM as well as some matrix computation.
  *
  * Notice that all those functionalities are independent of the Leon language and
  * are working for Integer (by opposition to real numbers).
  */
-
 object Algebra {
   /** Returns the remainder of the euclidian division between x an y (always positive) */
   def remainder(x: Int, y: Int) = ((x % y) + y.abs) % y.abs
@@ -171,7 +170,7 @@ object Algebra {
     }
   }
 
-  //return (x, y) such that ax + by = gcd(a, b)
+  /** Returns (x, y) such that ax + by = gcd(a, b) */
   def extendedEuclid(a: Int, b: Int): (Int, Int) = {
     def rec(a: Int, b: Int): (Int, Int) = {
       require(a >= 0 && b >= 0)
@@ -187,6 +186,7 @@ object Algebra {
     else if(a < 0 && b < 0) {val (x, y) = rec(-a, -b); (-x, -y)}
     else sys.error("shouldn't have forgot a case here")
   }
+  /** Returns (x, y) such that ax + by = gcd(a, b) (BigInt version) */
   def extendedEuclid(a: BigInt, b: BigInt): (BigInt, BigInt) = {
     def rec(a: BigInt, b: BigInt): (BigInt, BigInt) = {
       require(a >= 0 && b >= 0)
@@ -204,13 +204,13 @@ object Algebra {
   }
 
 
-  //val that the sol vector with the term in the equation
+  /** Computes the dot product of sol and equation */
   def eval(sol: Array[Int], equation: Array[Int]): Int = {
     require(sol.length == equation.length)
     sol.zip(equation).foldLeft(0)((acc, p) => acc + p._1 * p._2)
   }
 
-  //multiply the matrix by the vector: [M1 M2 .. Mn] * [v1 .. vn] = v1*M1 + ... + vn*Mn]
+  /** Multiplies the matrix by the vector: [M1 M2 .. Mn] * [v1 .. vn] = v1*M1 + ... + vn*Mn] */
   def mult(matrix: Array[Array[Int]], vector: Array[Int]): Array[Int] = {
     require(vector.length == matrix(0).length && vector.length > 0)
     val tmat = matrix.transpose
@@ -224,8 +224,10 @@ object Algebra {
     tmp
   }
 
+  /** Multiplies the vector v by the constant c */
   def mult(c: Int, v: Array[Int]): Array[Int] = v.map(_ * c)
 
+  /** Adds two vectors */
   def add(v1: Array[Int], v2: Array[Int]): Array[Int] = {
     require(v1.length == v2.length)
     v1.zip(v2).map(p => p._1 + p._2)

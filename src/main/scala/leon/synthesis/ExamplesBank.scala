@@ -13,8 +13,8 @@ import leon.utils.ASCIIHelpers._
 case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
   def examples = valids ++ invalids
 
-  // Minimize tests of a function so that tests that are invalid because of a
-  // recursive call are eliminated
+  /** Minimize tests of a function so that tests that are invalid because of a
+    * recursive call are eliminated */
   def minimizeInvalids(fd: FunDef, ctx: LeonContext, program: Program): ExamplesBank = {
     val evaluator = new RepairTrackingEvaluator(ctx, program)
 
@@ -48,6 +48,7 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
     ExamplesBank(valids, newInvalids.toSeq)
   }
 
+  /** Returns the union of this set of examples and another one */
   def union(that: ExamplesBank) = {
     ExamplesBank(
       distinctIns(this.valids union that.valids),
@@ -55,6 +56,7 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
     )
   }
 
+  /** Remove duplicate examples with the same inputs */
   private def distinctIns(s: Seq[Example]): Seq[Example] = {
     val insOuts = s.collect {
       case InOutExample(ins, outs) => ins -> outs
@@ -69,10 +71,12 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
     }
   }
 
+  /** Returns a new ExampleBank with examples obtained from applying f to these examples */
   def map(f: Example => List[Example]) = {
     ExamplesBank(valids.flatMap(f), invalids.flatMap(f))
   }
 
+  /** Returns a new ExampleBank with examples obtained from applying f to their inputs */
   def mapIns(f: Seq[Expr] => List[Seq[Expr]]) = {
     map {
       case InExample(in) =>
@@ -83,6 +87,7 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
     }
   }
 
+  /** Returns a new ExampleBank with examples obtained from applying f to the input-output examples */
   def mapOuts(f: Seq[Expr] => List[Seq[Expr]]) = {
     map {
       case InOutExample(in, out) =>
@@ -93,6 +98,7 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
     }
   }
 
+  /** Returns a new ExampleBank with examples obtained from removing output values */
   def stripOuts = {
     map {
       case InOutExample(in, out) =>
@@ -102,6 +108,7 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
     }
   }
 
+  /** Returns a string representing the set of examples */
   def asString(title: String)(implicit ctx: LeonContext): String = {
     var tt = new Table(title)
 
@@ -155,31 +162,41 @@ case class ExamplesBank(valids: Seq[Example], invalids: Seq[Example]) {
   }
 }
 
+/** Companion object for the class [[ExamplesBank]] */
 object ExamplesBank {
+  /** Returns an empty bank of examples */
   def empty = ExamplesBank(Nil, Nil)
 }
 
-// Same as an ExamplesBank, but with identifiers corresponding to values. This
-// allows us to evaluate expressions
+/** Wrapper around an ExamplesBank, with identifiers corresponding to input and output values.
+  * 
+  * @param as The identifiers for the input variables representing inputs
+  * @param xs The identifiers for the output variables representing outputs
+  * @param eb Sets of valid and invalid examples
+  * */
 case class QualifiedExamplesBank(as: List[Identifier], xs: List[Identifier], eb: ExamplesBank)(implicit hctx: SearchContext) {
 
+  /** Returns a new ExamplesBank where the outputs corresponding to the xs identifiers have been removed  */
   def removeOuts(toRemove: Set[Identifier]) = {
     val toKeep = xs.zipWithIndex.filterNot(x => toRemove(x._1)).map(_._2)
 
     eb mapOuts { out => List(toKeep.map(out)) }
   }
 
+  /** Returns a new ExamplesBank where the inputs corresponding to the as identifiers have been removed  */
   def removeIns(toRemove: Set[Identifier]) = {
     val toKeep = as.zipWithIndex.filterNot(a => toRemove(a._1)).map(_._2)
     eb mapIns { in => List(toKeep.map(in)) }
   }
 
+  /** Calls [[QualifiedExamplesBank.filterIns(pred:Map* filterIns]]. */
   def filterIns(expr: Expr): ExamplesBank = {
     val ev = new DefaultEvaluator(hctx.sctx.context, hctx.sctx.program)
 
     filterIns(m => ev.eval(expr, m).result == Some(BooleanLiteral(true)))
   }
 
+  /** Returns a set of examples where the predicate holds on input values. Calls [[QualifiedExamplesBank.mapIns mapIns]]. */
   def filterIns(pred: Map[Identifier, Expr] => Boolean): ExamplesBank = {
     eb mapIns { in =>
       val m = (as zip in).toMap
@@ -191,6 +208,10 @@ case class QualifiedExamplesBank(as: List[Identifier], xs: List[Identifier], eb:
     }
   }
 
+  /** Maps the input examples with a function
+    * 
+    * @param f A function taking a mapping between identifiers and expression and returning a list of expressions in the same order
+    * @return The set of examples whose inputs have been processed through function f */
   def mapIns(f: Seq[(Identifier, Expr)] => List[Seq[Expr]]) = {
     eb map {
       case InExample(in) =>

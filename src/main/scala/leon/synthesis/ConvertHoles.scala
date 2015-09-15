@@ -10,33 +10,33 @@ import purescala.ExprOps._
 import purescala.Definitions._
 import purescala.Constructors._
 
+/** Converts Hole constructs `???[A]` to choose constructs `choose((x: A) => ...` according to the surrounding post-condition.
+  *
+  * {{{
+  * def foo(a: T) = {
+  *   require(..a..)
+  *   expr(a, ???)
+  * } ensuring { x => post(x) }
+  * }}}
+  * gets converted into:
+  * {{{
+  * def foo(a: T) {
+  *   require(..a..)
+  *   val h = choose { (h) => {
+  *     val res = expr(a, ???)
+  *     post(res)
+  *   }
+  *   expr(a, h)
+  * } ensuring { res =>
+  *   post(res)
+  * }
+  * }}}
+  */
 object ConvertHoles extends LeonPhase[Program, Program] {
   val name        = "Convert Holes to Choose"
   val description = "Convert Holes found in bodies to equivalent Choose"
 
-  /**
-   * This phase converts a body with "withOracle{ .. }" into a choose construct:
-   *
-   * def foo(a: T) = {
-   *   require(..a..)
-   *   expr(a, ???)
-   * } ensuring { x => post(x) }
-   *
-   * gets converted into:
-   *
-   * def foo(a: T) {
-   *   require(..a..)
-   *   val h = choose { (h) => {
-   *     val res = expr(a, ???)
-   *     post(res)
-   *   }
-   *   expr(a, h)
-   * } ensuring { res =>
-   *   post(res)
-   * }
-   *
-   */
-
+  /** Conversion method */
   def convertHoles(e : Expr, ctx : LeonContext) : Expr = {
     val (pre, body, post) = breakDownSpecs(e)
 
