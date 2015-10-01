@@ -6,11 +6,12 @@ package codegen
 import purescala.Common._
 import purescala.Definitions._
 import purescala.Expressions._
+import purescala.ExprOps._
 import purescala.Types._
 import purescala.Extractors._
 import purescala.Constructors._
-
-import runtime.LeonCodeGenRuntimeMonitor
+import codegen.runtime.LeonCodeGenRuntimeMonitor
+import codegen.runtime.LeonCodeGenRuntimeHenkinMonitor
 import utils.UniqueCounter
 
 import cafebabe._
@@ -28,12 +29,17 @@ class CompilationUnit(val ctx: LeonContext,
                       val program: Program,
                       val params: CodeGenParams = CodeGenParams.default) extends CodeGeneration {
 
+  protected[codegen] val requireQuantification = program.definedFunctions.exists { fd =>
+    exists { case _: Forall => true case _ => false } (fd.fullBody)
+  }
+
+  protected[codegen] val requireMonitor = params.requireMonitor || requireQuantification
+
   val loader = new CafebabeClassLoader(classOf[CompilationUnit].getClassLoader)
 
-  var lambdas     = Map[String, Lambda]()
-  var classes     = Map[Definition, ClassFile]()
+  var classes = Map[Definition, ClassFile]()
   var defToModuleOrClass = Map[Definition, Definition]()
-  
+
   def defineClass(df: Definition) {
     val cName = defToJVMName(df)
 
@@ -59,7 +65,7 @@ class CompilationUnit(val ctx: LeonContext,
   def leonClassToJVMInfo(cd: ClassDef): Option[(String, String)] = {
     classes.get(cd) match {
       case Some(cf) =>
-        val monitorType = if (params.requireMonitor) "L"+MonitorClass+";" else ""
+        val monitorType = if (requireMonitor) "L"+MonitorClass+";" else ""
         val sig = "(" + monitorType + cd.fields.map(f => typeToJVM(f.getType)).mkString("") + ")V"
         Some((cf.className, sig))
       case _ => None
@@ -69,16 +75,16 @@ class CompilationUnit(val ctx: LeonContext,
   // Returns className, methodName, methodSignature
   private[this] var funDefInfo = Map[FunDef, (String, String, String)]()
 
-  
+
   /**
-   * Returns (cn, mn, sig) where 
+   * Returns (cn, mn, sig) where
    *  cn is the module name
    *  mn is the safe method name
    *  sig is the method signature
    */
   def leonFunDefToJVMInfo(fd: FunDef): Option[(String, String, String)] = {
     funDefInfo.get(fd).orElse {
-      val monitorType = if (params.requireMonitor) "L"+MonitorClass+";" else ""
+      val monitorType = if (requireMonitor) "L"+MonitorClass+";" else ""
 
       val sig = "(" + monitorType + fd.params.map(a => typeToJVM(a.getType)).mkString("") + ")" + typeToJVM(fd.returnType)
 
@@ -121,6 +127,21 @@ class CompilationUnit(val ctx: LeonContext,
     conss.last
   }
 
+  def modelToJVM(model: solvers.Model, maxInvocations: Int): LeonCodeGenRuntimeMonitor = model match {
+    case hModel: solvers.HenkinModel =>
+      val lhm = new LeonCodeGenRuntimeHenkinMonitor(maxInvocations)
+      for ((tpe, domain) <- hModel.domains; args <- domain) {
+        val tpeId = typeId(tpe)
+        // note here that it doesn't matter that `lhm` doesn't yet have its domains
+        // filled since all values in `args` should be grounded
+        val inputJvm = tupleConstructor.newInstance(args.map(valueToJVM(_)(lhm)).toArray).asInstanceOf[leon.codegen.runtime.Tuple]
+        lhm.add(tpeId, inputJvm)
+      }
+      lhm
+    case _ =>
+      new LeonCodeGenRuntimeMonitor(maxInvocations)
+  }
+
   /** Translates Leon values (not generic expressions) to JVM compatible objects.
     *
     * Currently, this method is only used to prepare arguments to reflective calls.
@@ -143,8 +164,8 @@ class CompilationUnit(val ctx: LeonContext,
     case InfiniteIntegerLiteral(v) =>
       new runtime.BigInt(v.toString)
 
-    case RealLiteral(v) =>
-      new runtime.Real(v.toString)
+    case FractionalLiteral(n, d) =>
+      new runtime.Rational(n.toString, d.toString)
 
     case GenericValue(tp, id) =>
       e
@@ -155,7 +176,7 @@ class CompilationUnit(val ctx: LeonContext,
     case CaseClass(cct, args) =>
       caseClassConstructor(cct.classDef) match {
         case Some(cons) =>
-          val realArgs = if (params.requireMonitor) monitor +: args.map(valueToJVM) else args.map(valueToJVM)
+          val realArgs = if (requireMonitor) monitor +: args.map(valueToJVM) else  args.map(valueToJVM)
           cons.newInstance(realArgs.toArray : _*).asInstanceOf[AnyRef]
         case None =>
           ctx.reporter.fatalError("Case class constructor not found?!?")
@@ -180,11 +201,9 @@ class CompilationUnit(val ctx: LeonContext,
       }
       m
 
-    case f @ purescala.Extractors.FiniteLambda(dflt, els) =>
-      val l = new leon.codegen.runtime.FiniteLambda(valueToJVM(dflt))
-
-      for ((k,v) <- els) {
-        val ks = unwrapTuple(k, f.getType.asInstanceOf[FunctionType].from.size)
+    case f @ PartialLambda(mapping, _) =>
+      val l = new leon.codegen.runtime.PartialLambda()
+      for ((ks,v) <- mapping) {
         // Force tuple even with 1/0 elems.
         val kJvm = tupleConstructor.newInstance(ks.map(valueToJVM).toArray).asInstanceOf[leon.codegen.runtime.Tuple]
         val vJvm = valueToJVM(v)
@@ -199,7 +218,7 @@ class CompilationUnit(val ctx: LeonContext,
     //case _ =>
     //  compileExpression(e, Seq()).evalToJVM(Seq(),monitor)
   }
-  
+
   /** Translates JVM objects back to Leon values of the appropriate type */
   def jvmToValue(e: AnyRef, tpe: TypeTree): Expr = (e, tpe) match {
     case (i: Integer, Int32Type) =>
@@ -208,8 +227,10 @@ class CompilationUnit(val ctx: LeonContext,
     case (c: runtime.BigInt, IntegerType) =>
       InfiniteIntegerLiteral(BigInt(c.underlying))
 
-    case (c: runtime.Real, RealType) =>
-      RealLiteral(BigDecimal(c.underlying))
+    case (c: runtime.Rational, RealType) =>
+      val num = BigInt(c.numerator())
+      val denom = BigInt(c.denominator())
+      FractionalLiteral(num, denom)
 
     case (b: java.lang.Boolean, BooleanType) =>
       BooleanLiteral(b.booleanValue)
@@ -238,7 +259,7 @@ class CompilationUnit(val ctx: LeonContext,
 
     case (tpl: runtime.Tuple, tpe) =>
       val stpe = unwrapTupleType(tpe, tpl.getArity)
-      val elems = stpe.zipWithIndex.map { case (tpe, i) => 
+      val elems = stpe.zipWithIndex.map { case (tpe, i) =>
         jvmToValue(tpl.get(i), tpe)
       }
       tupleWrap(elems)
@@ -261,10 +282,10 @@ class CompilationUnit(val ctx: LeonContext,
     case (lambda: runtime.Lambda, _: FunctionType) =>
       val cls = lambda.getClass
 
-      val l = lambdas(cls.getName)
+      val l = classToLambda(cls.getName)
       val closures = purescala.ExprOps.variablesOf(l).toSeq.sortBy(_.uniqueName)
       val closureVals = closures.map { id =>
-        val fieldVal = lambda.getClass.getField(id.name).get(lambda)
+        val fieldVal = lambda.getClass.getField(id.uniqueName).get(lambda)
         jvmToValue(fieldVal, id.getType)
       }
 
@@ -308,7 +329,7 @@ class CompilationUnit(val ctx: LeonContext,
 
     val argsTypes = args.map(a => typeToJVM(a.getType))
 
-    val realArgs = if (params.requireMonitor) {
+    val realArgs = if (requireMonitor) {
       ("L" + MonitorClass + ";") +: argsTypes
     } else {
       argsTypes
@@ -328,13 +349,13 @@ class CompilationUnit(val ctx: LeonContext,
 
     val ch = m.codeHandler
 
-    val newMapping = if (params.requireMonitor) {
-        args.zipWithIndex.toMap.mapValues(_ + 1)
-      } else {
-        args.zipWithIndex.toMap
-      }
+    val newMapping = if (requireMonitor) {
+      args.zipWithIndex.toMap.mapValues(_ + 1) + (monitorID -> 0)
+    } else {
+      args.zipWithIndex.toMap
+    }
 
-    mkExpr(e, ch)(Locals(newMapping, Map.empty, Map.empty, isStatic = true))
+    mkExpr(e, ch)(NoLocals.withVars(newMapping))
 
     e.getType match {
       case ValueType() =>
@@ -360,53 +381,54 @@ class CompilationUnit(val ctx: LeonContext,
 
     val (fields, functions) = module.definedFunctions partition { _.canBeField }
     val (strictFields, lazyFields) = fields partition { _.canBeStrictField }
-    
+
     // Compile methods
     for (function <- functions) {
       compileFunDef(function,module)
     }
-    
+
     // Compile lazy fields
     for (lzy <- lazyFields) {
       compileLazyField(lzy, module)
     }
-    
+
     // Compile strict fields
     for (field <- strictFields) {
       compileStrictField(field, module)
     }
- 
+
     // Constructor
     cf.addDefaultConstructor
-    
+
     val cName = defToJVMName(module)
-    
+
     // Add class initializer method
-    locally{ 
+    locally{
       val mh = cf.addMethod("V", "<clinit>")
       mh.setFlags((
-        METHOD_ACC_STATIC | 
+        METHOD_ACC_STATIC |
         METHOD_ACC_PUBLIC
       ).asInstanceOf[U2])
-      
+
       val ch = mh.codeHandler
       /*
        * FIXME :
        * Dirty hack to make this compatible with monitoring of method invocations.
-       * Because we don't have access to the monitor object here, we initialize a new one 
-       * that will get lost when this method returns, so we can't hope to count 
-       * method invocations here :( 
+       * Because we don't have access to the monitor object here, we initialize a new one
+       * that will get lost when this method returns, so we can't hope to count
+       * method invocations here :(
        */
+      val locals = NoLocals.withVar(monitorID -> ch.getFreshVar)
       ch << New(MonitorClass) << DUP
       ch << Ldc(Int.MaxValue) // Allow "infinite" method calls
       ch << InvokeSpecial(MonitorClass, cafebabe.Defaults.constructorName, "(I)V")
-      ch << AStore(ch.getFreshVar) // position 0
-      for (lzy <- lazyFields) { initLazyField(ch, cName, lzy, isStatic = true)}
-      for (field <- strictFields) { initStrictField(ch, cName , field, isStatic = true)}
+      ch << AStore(locals.varToLocal(monitorID).get) // position 0
+      for (lzy <- lazyFields) { initLazyField(ch, cName, lzy, isStatic = true)(locals) }
+      for (field <- strictFields) { initStrictField(ch, cName , field, isStatic = true)(locals) }
       ch  << RETURN
       ch.freeze
     }
-  
+
   }
 
   /** Traverses the program to find all definitions, and stores those in global variables */
@@ -423,7 +445,7 @@ class CompilationUnit(val ctx: LeonContext,
           defToModuleOrClass += meth -> cls
         }
       }
-     
+
       for (m <- u.modules) {
         defineClass(m)
         for(funDef <- m.definedFunctions) {
@@ -433,14 +455,14 @@ class CompilationUnit(val ctx: LeonContext,
     }
   }
 
-  /** Compiles the program. 
+  /** Compiles the program.
     *
     * Uses information provided by [[init]].
     */
   def compile() {
     // Compile everything
     for (u <- program.units) {
-      
+
       for {
         ch <- u.classHierarchies
         c  <- ch
@@ -454,7 +476,6 @@ class CompilationUnit(val ctx: LeonContext,
       }
 
       for (m <- u.modules) compileModule(m)
-      
     }
 
     classes.values.foreach(loader.register)

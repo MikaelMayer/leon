@@ -17,18 +17,21 @@ object Main {
       xlang.ImperativeCodeElimination,
       xlang.FixReportLabels,
       xlang.XLangDesugaringPhase,
-      purescala.FunctionClosure,
+      new purescala.FunctionClosure,
       synthesis.SynthesisPhase,
       termination.TerminationPhase,
       verification.AnalysisPhase,
       repair.RepairPhase,
-      evaluators.EvaluationPhase
-    )
+      evaluators.EvaluationPhase,
+      solvers.isabelle.AdaptationPhase,
+      solvers.isabelle.IsabellePhase,
+      transformations.InstrumentationPhase,
+      invariant.engine.InferInvariantsPhase)
   }
 
   // Add whatever you need here.
   lazy val allComponents : Set[LeonComponent] = allPhases.toSet ++ Set(
-    solvers.z3.FairZ3Component, MainComponent, SharedOptions, solvers.smtlib.SMTLIBCVC4Component
+    solvers.z3.FairZ3Component, MainComponent, SharedOptions, solvers.smtlib.SMTLIBCVC4Component, solvers.isabelle.Component
   )
 
   /*
@@ -43,13 +46,15 @@ object Main {
     val optTermination = LeonFlagOptionDef("termination", "Check program termination. Can be used along --verify", false)
     val optRepair      = LeonFlagOptionDef("repair",      "Repair selected functions",                             false)
     val optSynthesis   = LeonFlagOptionDef("synthesis",   "Partial synthesis of choose() constructs",              false)
+    val optIsabelle    = LeonFlagOptionDef("isabelle",    "Run Isabelle verification",                             false)
     val optNoop        = LeonFlagOptionDef("noop",        "No operation performed, just output program",           false)
     val optVerify      = LeonFlagOptionDef("verify",      "Verify function contracts",                             false)
     val optHelp        = LeonFlagOptionDef("help",        "Show help message",                                     false)
+    val optInstrument = LeonFlagOptionDef("instrument", "Instrument the code for inferring time/depth/stack bounds", false)
+    val optInferInv = LeonFlagOptionDef("inferInv", "Infer invariants from (instrumented) the code", false)
 
     override val definedOptions: Set[LeonOptionDef[Any]] =
-      Set(optTermination, optRepair, optSynthesis, optNoop, optHelp, optEval, optVerify)
-
+      Set(optTermination, optRepair, optSynthesis, optIsabelle, optNoop, optHelp, optEval, optVerify, optInstrument, optInferInv)
   }
 
   lazy val allOptions: Set[LeonOptionDef[Any]] = allComponents.flatMap(_.definedOptions)
@@ -67,8 +72,8 @@ object Main {
       reporter.info(opt.helpString)
     }
     reporter.info("")
-      
-    reporter.title("Additional options, by component:")
+
+    reporter.info("Additional options, by component:")
 
     for (c <- (allComponents - MainComponent - SharedOptions).toSeq.sortBy(_.name) if c.definedOptions.nonEmpty) {
       reporter.info("")
@@ -140,48 +145,35 @@ object Main {
     import frontends.scalac.ExtractionPhase
     import synthesis.SynthesisPhase
     import termination.TerminationPhase
-    import xlang.{XLangDesugaringPhase, FixReportLabels}
+    import xlang.FixReportLabels
     import verification.AnalysisPhase
     import repair.RepairPhase
     import evaluators.EvaluationPhase
+    import solvers.isabelle.IsabellePhase
     import MainComponent._
+    import invariant.engine.InferInvariantsPhase
+    import transformations.InstrumentationPhase
 
     val helpF        = ctx.findOptionOrDefault(optHelp)
     val noopF        = ctx.findOptionOrDefault(optNoop)
     val synthesisF   = ctx.findOptionOrDefault(optSynthesis)
     val xlangF       = ctx.findOptionOrDefault(SharedOptions.optXLang)
     val repairF      = ctx.findOptionOrDefault(optRepair)
+    val isabelleF    = ctx.findOptionOrDefault(optIsabelle)
     val terminationF = ctx.findOptionOrDefault(optTermination)
     val verifyF      = ctx.findOptionOrDefault(optVerify)
     val evalF        = ctx.findOption(optEval).isDefined
+    val inferInvF = ctx.findOptionOrDefault(optInferInv)
+    val instrumentF = ctx.findOptionOrDefault(optInstrument)
     val analysisF    = verifyF && terminationF
-
-    def debugTrees(title: String): LeonPhase[Program, Program] = {
-      if (ctx.reporter.isDebugEnabled(DebugSectionTrees)) {
-        PrintTreePhase(title)
-      } else {
-        NoopPhase[Program]()
-      }
-    }
 
     if (helpF) {
       displayVersion(ctx.reporter)
       displayHelp(ctx.reporter, error = false)
     } else {
       val pipeBegin: Pipeline[List[String], Program] =
-        if (xlangF)
-          ExtractionPhase andThen
-          debugTrees("Program after extraction") andThen
-          PreprocessingPhase andThen
-          debugTrees("Program after pre-processing") andThen
-          XLangDesugaringPhase andThen
-          debugTrees("Program after xlang desugaring")
-        else
-          ExtractionPhase andThen
-          debugTrees("Program after extraction") andThen
-          PreprocessingPhase andThen
-          debugTrees("Program after pre-processing") andThen
-          xlang.NoXLangFeaturesChecking
+        ExtractionPhase andThen
+        new PreprocessingPhase(xlangF)
 
       val analysis = if (xlangF) AnalysisPhase andThen FixReportLabels else AnalysisPhase
 
@@ -189,13 +181,14 @@ object Main {
         if (noopF) RestoreMethods andThen FileOutputPhase
         else if (synthesisF) SynthesisPhase
         else if (repairF) RepairPhase
-        else if (analysisF) Pipeline.both(
-          FunctionClosure andThen analysis,
-          TerminationPhase
-        )
+        else if (analysisF) Pipeline.both(analysis, TerminationPhase)
         else if (terminationF) TerminationPhase
+        else if (isabelleF) IsabellePhase
         else if (evalF) EvaluationPhase
-        else FunctionClosure andThen analysis
+        else if (inferInvF) InstrumentationPhase andThen InferInvariantsPhase
+        else if (instrumentF) InstrumentationPhase andThen FileOutputPhase
+        else analysis
+
       }
 
       pipeBegin andThen
@@ -258,7 +251,7 @@ object Main {
         case (vReport: verification.VerificationReport, tReport: termination.TerminationReport) =>
           ctx.reporter.info(vReport.summaryString)
           ctx.reporter.info(tReport.summaryString)
-        
+
         case report: verification.VerificationReport =>
           ctx.reporter.info(report.summaryString)
 

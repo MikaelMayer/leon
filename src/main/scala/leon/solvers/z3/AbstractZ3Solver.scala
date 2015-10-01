@@ -80,7 +80,7 @@ trait AbstractZ3Solver extends Solver {
       z3.mkFreshFuncDecl(gv.tp.id.uniqueName+"#"+gv.id+"!val", Seq(), typeToSort(gv.tp))
     }
   }
-  
+
   // ADT Manager
   protected val adtManager = new ADTManager(context)
 
@@ -272,7 +272,7 @@ trait AbstractZ3Solver extends Solver {
     }
 
     def rec(ex: Expr): Z3AST = ex match {
-      
+
       // TODO: Leave that as a specialization?
       case LetTuple(ids, e, b) => {
         z3Vars = z3Vars ++ ids.zipWithIndex.map { case (id, ix) =>
@@ -283,7 +283,7 @@ trait AbstractZ3Solver extends Solver {
         z3Vars = z3Vars -- ids
         rb
       }
-      
+
       case p @ Passes(_, _, _) =>
         rec(p.asConstraint)
 
@@ -326,7 +326,7 @@ trait AbstractZ3Solver extends Solver {
       case Not(e) => z3.mkNot(rec(e))
       case IntLiteral(v) => z3.mkInt(v, typeToSort(Int32Type))
       case InfiniteIntegerLiteral(v) => z3.mkNumeral(v.toString, typeToSort(IntegerType))
-      case RealLiteral(v) => z3.mkNumeral(v.toString, typeToSort(RealType))
+      case FractionalLiteral(n, d) => z3.mkNumeral(s"$n / $d", typeToSort(RealType))
       case CharLiteral(c) => z3.mkInt(c, typeToSort(CharType))
       case BooleanLiteral(v) => if (v) z3.mkTrue() else z3.mkFalse()
       case Equals(l, r) => z3.mkEq(rec( l ), rec( r ) )
@@ -381,6 +381,7 @@ trait AbstractZ3Solver extends Solver {
         case RealType => z3.mkLE(rec(l), rec(r))
         case Int32Type => z3.mkBVSle(rec(l), rec(r))
         case CharType => z3.mkBVSle(rec(l), rec(r))
+        //case _ => throw new IllegalStateException(s"l: $l, Left type: ${l.getType} Expr: $ex")
       }
       case GreaterThan(l, r) => l.getType match {
         case IntegerType => z3.mkGT(rec(l), rec(r))
@@ -544,25 +545,6 @@ trait AbstractZ3Solver extends Solver {
     rec(expr)
   }
 
-  protected def fromRawArray(r: Expr, tpe: TypeTree): Expr = r match {
-    case rav: RawArrayValue =>
-      fromRawArray(rav, tpe)
-    case _ =>
-      scala.sys.error("Unable to extract from raw array for "+r.asString)
-  }
-
-  protected def fromRawArray(r: RawArrayValue, tpe: TypeTree): Expr = tpe match {
-    case RawArrayType(from, to) =>
-      r
-
-    case ft @ FunctionType(from, to) =>
-      finiteLambda(r.default, r.elems.toSeq, from)
-
-
-    case _ =>
-      scala.sys.error("Unable to extract from raw array for "+tpe.asString)
-  }
-
   protected[leon] def fromZ3Formula(model: Z3Model, tree: Z3AST, tpe: TypeTree): Expr = {
 
     def rec(t: Z3AST, tpe: TypeTree): Expr = {
@@ -602,9 +584,7 @@ trait AbstractZ3Solver extends Solver {
             }
           }
         }
-        case Z3NumeralRealAST(num: BigInt, den: BigInt) => {
-          RealLiteral(BigDecimal(num) / BigDecimal(den))
-        }
+        case Z3NumeralRealAST(n: BigInt, d: BigInt) => FractionalLiteral(n, d)
         case Z3AppAST(decl, args) =>
           val argsSize = args.size
           if(argsSize == 0 && (variables containsB t)) {
@@ -637,7 +617,7 @@ trait AbstractZ3Solver extends Solver {
                       case _ => reporter.fatalError("Translation from Z3 to Array failed")
                     }
 
-                    finiteArray(entries, Some(s, default), to)
+                    finiteArray(entries, Some(default, s), to)
                   case _ =>
                     reporter.fatalError("Translation from Z3 to Array failed")
                 }
@@ -678,15 +658,8 @@ trait AbstractZ3Solver extends Solver {
                     FiniteMap(elems, from, to)
                 }
 
-
               case FunctionType(fts, tt) =>
-                model.getArrayValue(t) match {
-                  case None => reporter.fatalError("Translation from Z3 to function value failed")
-                  case Some((map, elseZ3Value)) =>
-                    val leonElseValue = rec(elseZ3Value, tt)
-                    val leonMap = map.toSeq.map(p => rec(p._1, tupleTypeWrap(fts)) -> rec(p._2, tt))
-                    finiteLambda(leonElseValue, leonMap, fts)
-                }
+                rec(t, RawArrayType(tupleTypeWrap(fts), tt))
 
               case tpe @ SetType(dt) =>
                 model.getSetValue(t) match {

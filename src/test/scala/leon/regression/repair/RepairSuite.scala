@@ -10,7 +10,7 @@ import leon.repair._
 
 class RepairSuite extends LeonRegressionSuite {
   val pipeline = ExtractionPhase andThen 
-    PreprocessingPhase andThen
+    new PreprocessingPhase andThen
     RepairPhase
     
   val fileToFun = Map(
@@ -27,6 +27,7 @@ class RepairSuite extends LeonRegressionSuite {
     val name = file.getName
 
     val reporter = new TestSilentReporter
+    //val reporter = new DefaultReporter(Set(utils.DebugSectionRepair))
 
     val ctx = LeonContext(
       reporter = reporter,
@@ -40,7 +41,7 @@ class RepairSuite extends LeonRegressionSuite {
     test(name) {
       pipeline.run(ctx)(List(path))
       if(reporter.errorCount > 0) {
-        fail("Errors during repair:\n"+reporter.lastErrors.mkString("\n"))
+        fail("Errors during repair:\n")//+reporter.lastErrors.mkString("\n"))
       }
     }
   }

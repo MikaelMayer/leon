@@ -31,7 +31,7 @@ object ChooseEntryPoint {
   private val intCounter = new UniqueCounter[Unit]
   intCounter.nextGlobal // Start with 1
 
-  private def getUniqueId(unit: CompilationUnit, p: Problem): ChooseId = {
+  private def getUniqueId(unit: CompilationUnit, p: Problem): ChooseId = synchronized {
     if (!ids.containsKey(unit)) {
       ids.put(unit, new MutableMap())
     }
@@ -44,7 +44,6 @@ object ChooseEntryPoint {
       cid
     }
   }
-
 
   def register(p: Problem, unit: CompilationUnit): Int = {
     val cid = getUniqueId(unit, p)
@@ -76,8 +75,8 @@ object ChooseEntryPoint {
     } else {
       val tStart = System.currentTimeMillis
 
-      val solverf = SolverFactory.default(ctx, program)
-      val solver = solverf.getNewSolver().setTimeout(10.seconds)
+      val solverf = SolverFactory.default(ctx, program).withTimeout(10.second)
+      val solver = solverf.getNewSolver()
 
       val inputsMap = (p.as zip inputs).map {
         case (id, v) =>
@@ -110,7 +109,7 @@ object ChooseEntryPoint {
             throw new LeonCodeGenRuntimeException("Timeout exceeded")
         }
       } finally {
-        solverf.reclaim(solver)
+        solver.free()
         solverf.shutdown()
       }
     }

@@ -10,7 +10,7 @@ import Extractors._
 import ExprOps._
 import Constructors._
 
-object FunctionClosure extends TransformationPhase {
+class FunctionClosure extends TransformationPhase {
 
   val name = "Function Closure"
   val description = "Closing function with its scoping variables"
@@ -77,7 +77,9 @@ object FunctionClosure extends TransformationPhase {
       val newPrecondition = simplifyLets(introduceLets(and((capturedConstraints ++ fd.precondition).toSeq :_*), fd2FreshFd))
       newFunDef.precondition = if(newPrecondition == BooleanLiteral(true)) None else Some(newPrecondition)
 
-      val freshPostcondition = fd.postcondition.map{ post => introduceLets(post, fd2FreshFd).setPos(post) }
+      val freshPostcondition = fd.postcondition.map { case post @ Lambda(args, body) =>
+        Lambda(args, introduceLets(body, fd2FreshFd).setPos(body)).setPos(post)
+      }
       newFunDef.postcondition = freshPostcondition
       
       pathConstraints = fd.precondition.getOrElse(BooleanLiteral(true)) :: pathConstraints
@@ -175,5 +177,4 @@ object FunctionClosure extends TransformationPhase {
     } while(newVars != Set())
     (filteredConstraints, allVars)
   }
-
 }

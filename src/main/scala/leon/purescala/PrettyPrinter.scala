@@ -123,6 +123,10 @@ class PrettyPrinter(opts: PrinterOptions,
         } else {
           p"""|?($es)"""
         }
+
+      case Forall(args, e) =>
+        p"""\u2200${typed(args.map(_.id))}. $e"""
+
       case e @ CaseClass(cct, args) =>
         opgm.flatMap { pgm => isListLiteral(e)(pgm) } match {
           case Some((tpe, elems)) =>
@@ -156,7 +160,9 @@ class PrettyPrinter(opts: PrinterOptions,
       case Equals(l,r)          => optP { p"$l == $r" }
       case IntLiteral(v)        => p"$v"
       case InfiniteIntegerLiteral(v) => p"$v"
-      case RealLiteral(d)       => p"$d"
+      case FractionalLiteral(n, d) =>
+        if (d == 1) p"$n"
+        else p"$n/$d"
       case CharLiteral(v)       => p"$v"
       case BooleanLiteral(v)    => p"$v"
       case UnitLiteral()        => p"()"
@@ -282,7 +288,7 @@ class PrettyPrinter(opts: PrinterOptions,
               val orderedElements = es.toSeq.sortWith((e1, e2) => e1._1 < e2._1).map(el => el._2)
               p"Array($orderedElements)"
             } else if(length < 10) {
-              val elems = (0 until length).map(i => 
+              val elems = (0 until length).map(i =>
                 es.find(el => el._1 == i).map(el => el._2).getOrElse(d.get)
               )
               p"Array($elems)"
@@ -402,7 +408,7 @@ class PrettyPrinter(opts: PrinterOptions,
 
       // Definitions
       case Program(units) =>
-        p"""${nary(units filter { _.isMainUnit }, "\n\n")}"""
+        p"""${nary(units filter { opts.printUniqueIds || _.isMainUnit }, "\n\n")}"""
 
       case UnitDef(id,pack, imports, defs,_) =>
         if (pack.nonEmpty){
@@ -414,7 +420,7 @@ class PrettyPrinter(opts: PrinterOptions,
             |${nary(defs,"\n\n")}
             |"""
 
-      case Import(path, isWild) => 
+      case Import(path, isWild) =>
         if (isWild) {
           p"import ${nary(path,".")}._"
         } else {
@@ -513,18 +519,16 @@ class PrettyPrinter(opts: PrinterOptions,
   }
 
   protected object FcallMethodInvocation {
-    def unapply(fi: FunctionInvocation): Option[(Expr, FunDef, String, Seq[TypeTree], Seq[Expr])] = {
+    def unapply(fi: FunctionInvocation): Option[(Expr, FunDef, Identifier, Seq[TypeTree], Seq[Expr])] = {
       val FunctionInvocation(tfd, args) = fi
       tfd.fd.methodOwner.map { cd =>
         val (rec, rargs) = (args.head, args.tail)
 
         val fid = tfd.fd.id
 
-        val fname = fid.name
-
         val realtps = tfd.tps.drop(cd.tparams.size)
 
-        (rec, tfd.fd, fname, realtps, rargs)
+        (rec, tfd.fd, fid, realtps, rargs)
       }
     }
   }
@@ -533,8 +537,8 @@ class PrettyPrinter(opts: PrinterOptions,
     val makeBinary = Set("+", "-", "*", "::", "++", "--", "&&", "||", "/")
 
     def unapply(fi: FunctionInvocation): Option[(Expr, String, Expr)] = fi match {
-      case FcallMethodInvocation(rec, _, name, Nil, List(a)) =>
-
+      case FcallMethodInvocation(rec, _, id, Nil, List(a)) =>
+        val name = id.name
         if (makeBinary contains name) {
           if(name == "::")
             Some((a, name, rec))
@@ -558,6 +562,8 @@ class PrettyPrinter(opts: PrinterOptions,
     case Let(_, _, bd) => Seq(bd)
     case LetDef(_, bd) => Seq(bd)
     case Require(_, bd) => Seq(bd)
+    case IfExpr(_, t, e) => Seq(t, e) // If always has braces anyway
+    case Ensuring(_, pred) => Seq(pred)
     case _ => Seq()
   }
 

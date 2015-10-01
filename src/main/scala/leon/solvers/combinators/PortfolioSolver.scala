@@ -19,9 +19,7 @@ class PortfolioSolver[S <: Solver with Interruptible](val context: LeonContext, 
 
   val name = "Pfolio"
 
-  var constraints = List[Expr]()
-
-  protected var modelMap = Map[Identifier, Expr]()
+  protected var model = Model.empty
   protected var resultSolver: Option[Solver] = None
 
   override def getResultSolver = resultSolver
@@ -35,27 +33,29 @@ class PortfolioSolver[S <: Solver with Interruptible](val context: LeonContext, 
   }
 
   def check: Option[Boolean] = {
-    modelMap = Map()
+    model = Model.empty
 
     context.reporter.debug("Running portfolio check")
     // solving
     val fs = solvers.map { s =>
       Future {
         val result = s.check
-        val model: Map[Identifier, Expr] = if (result == Some(true)) {
+        val model: Model = if (result == Some(true)) {
           s.getModel
         } else {
-          Map()
+          Model.empty
         }
         (s, result, model)
       }
     }
 
+    fs.foreach(_ onFailure { case ex: Throwable => ex.printStackTrace() })
+
     val result = Future.find(fs)(_._2.isDefined)
 
     val res = Await.result(result, Duration.Inf) match {
       case Some((s, r, m)) =>
-        modelMap = m
+        model = m
         resultSolver = s.getResultSolver
         resultSolver.foreach { solv =>
           context.reporter.debug("Solved with "+solv)
@@ -63,10 +63,12 @@ class PortfolioSolver[S <: Solver with Interruptible](val context: LeonContext, 
         solvers.foreach(_.interrupt())
         r
       case None =>
+        context.reporter.debug("No solver succeeded")
+        fs.foreach(f => println(f.value))
         None
     }
 
-    fs map { Await.ready(_, Duration.Inf) }
+    fs foreach { Await.ready(_, Duration.Inf) }
     res
   }
 
@@ -80,12 +82,11 @@ class PortfolioSolver[S <: Solver with Interruptible](val context: LeonContext, 
 
   def free() = {
     solvers.foreach(_.free)
-    modelMap = Map()
-    constraints = Nil
+    model = Model.empty
   }
 
-  def getModel: Map[Identifier, Expr] = {
-    modelMap
+  def getModel: Model = {
+    model
   }
 
   def interrupt(): Unit = {
@@ -98,7 +99,6 @@ class PortfolioSolver[S <: Solver with Interruptible](val context: LeonContext, 
 
   def reset() = {
     solvers.foreach(_.reset)
-    modelMap = Map()
-    constraints = Nil
+    model = Model.empty
   }
 }

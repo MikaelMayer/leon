@@ -11,9 +11,11 @@ import purescala.Types._
 import purescala.TypeOps.isSubtypeOf
 import purescala.Constructors._
 import purescala.Extractors._
-
+import purescala.Quantification._
+import solvers.{Model, HenkinModel}
 import solvers.SolverFactory
 import synthesis.ConvertHoles.convertHoles
+import leon.purescala.ExprOps
 
 abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int) extends Evaluator(ctx, prog) {
   val name = "evaluator"
@@ -41,25 +43,25 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
     }
   }
 
-  class GlobalContext {
+  class GlobalContext(val model: Model) {
     def maxSteps = RecursiveEvaluator.this.maxSteps
 
     var stepsLeft = maxSteps
   }
 
   def initRC(mappings: Map[Identifier, Expr]): RC
-  def initGC(): GC
+  def initGC(model: Model): GC
 
   // Used by leon-web, please do not delete
   var lastGC: Option[GC] = None
 
   private[this] var clpCache = Map[(Choose, Seq[Expr]), Expr]()
 
-  def eval(ex: Expr, mappings: Map[Identifier, Expr]) = {
+  def eval(ex: Expr, model: Model) = {
     try {
-      lastGC = Some(initGC())
+      lastGC = Some(initGC(model))
       ctx.timers.evaluators.recursive.runtime.start()
-      EvaluationResults.Successful(e(ex)(initRC(mappings), lastGC.get))
+      EvaluationResults.Successful(e(ex)(initRC(model.toMap), lastGC.get))
     } catch {
       case so: StackOverflowError =>
         EvaluationResults.EvaluatorError("Stack overflow")
@@ -87,10 +89,16 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
 
     case Application(caller, args) =>
       e(caller) match {
-        case l@Lambda(params, body) =>
+        case l @ Lambda(params, body) =>
           val newArgs = args.map(e)
           val mapping = l.paramSubst(newArgs)
           e(body)(rctx.withNewVars(mapping), gctx)
+        case PartialLambda(mapping, _) =>
+          mapping.find { case (pargs, res) =>
+            (args zip pargs).forall(p => e(Equals(p._1, p._2)) == BooleanLiteral(true))
+          }.map(_._2).getOrElse {
+            throw EvalError("Cannot apply partial lambda outside of domain")
+          }
         case f =>
           throw EvalError("Cannot apply non-lambda function " + f.asString)
       }
@@ -114,11 +122,11 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       if ( exists{
         case Hole(_,_) => true
         case _ => false
-      }(en)) 
+      }(en))
         e(convertHoles(en, ctx))
       else
         e(en.toAssert)
-    
+
     case Error(tpe, desc) =>
       throw RuntimeError("Error reached in evaluation: " + desc)
 
@@ -139,7 +147,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       val nil = CaseClass(CaseClassType(program.library.Nil.get, Seq(tp)), Seq())
       def mkCons(h: Expr, t: Expr) = CaseClass(CaseClassType(cons, Seq(tp)), Seq(h,t))
       els.foldRight(nil)(mkCons)
-      
+
     case FunctionInvocation(tfd, args) =>
       if (gctx.stepsLeft < 0) {
         throw RuntimeError("Exceeded number of allocated methods calls ("+gctx.maxSteps+")")
@@ -169,7 +177,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       val callResult = e(body)(frame, gctx)
 
       tfd.postcondition match  {
-        case Some(post) => 
+        case Some(post) =>
           e(application(post, Seq(callResult)))(frame, gctx) match {
             case BooleanLiteral(true) =>
             case BooleanLiteral(false) => throw RuntimeError("Postcondition violation for " + tfd.id.asString + " reached in evaluation.")
@@ -217,6 +225,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       (lv,rv) match {
         case (FiniteSet(el1, _),FiniteSet(el2, _)) => BooleanLiteral(el1 == el2)
         case (FiniteMap(el1, _, _),FiniteMap(el2, _, _)) => BooleanLiteral(el1.toSet == el2.toSet)
+        case (PartialLambda(m1, _), PartialLambda(m2, _)) => BooleanLiteral(m1.toSet == m2.toSet)
         case _ => BooleanLiteral(lv == rv)
       }
 
@@ -228,7 +237,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       if (isSubtypeOf(le.getType, ct)) {
         le
       } else {
-        throw RuntimeError("Cast error: cannot cast "+le.asString+" to "+ct.asString) 
+        throw RuntimeError("Cast error: cannot cast "+le.asString+" to "+ct.asString)
       }
 
     case IsInstanceOf(expr, ct) =>
@@ -254,17 +263,15 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
         case (le,re) => throw EvalError(typeErrorMsg(le, IntegerType))
       }
 
-    case RealPlus(l,r) =>
+    case RealPlus(l, r) =>
       (e(l), e(r)) match {
-        case (RealLiteral(i1), RealLiteral(i2)) => RealLiteral(i1 + i2)
-        case (le,re) => throw EvalError(typeErrorMsg(le, RealType))
+        case (FractionalLiteral(ln, ld), FractionalLiteral(rn, rd)) =>
+          normalizeFraction(FractionalLiteral((ln * rd + rn * ld), (ld * rd)))
+        case (le, re) => throw EvalError(typeErrorMsg(le, RealType))
       }
 
     case RealMinus(l,r) =>
-      (e(l), e(r)) match {
-        case (RealLiteral(i1), RealLiteral(i2)) => RealLiteral(i1 - i2)
-        case (le,re) => throw EvalError(typeErrorMsg(le, RealType))
-      }
+      e(RealPlus(l, RealUMinus(r)))
 
     case BVPlus(l,r) =>
       (e(l), e(r)) match {
@@ -292,7 +299,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
 
     case RealUMinus(ex) =>
       e(ex) match {
-        case RealLiteral(i) => RealLiteral(-i)
+        case FractionalLiteral(n, d) => FractionalLiteral(-n, d)
         case re => throw EvalError(typeErrorMsg(re, RealType))
       }
 
@@ -324,12 +331,12 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       }
     case Modulo(l,r) =>
       (e(l), e(r)) match {
-        case (InfiniteIntegerLiteral(i1), InfiniteIntegerLiteral(i2)) => 
+        case (InfiniteIntegerLiteral(i1), InfiniteIntegerLiteral(i2)) =>
           if(i2 < 0)
             InfiniteIntegerLiteral(i1 mod (-i2))
-          else if(i2 != BigInt(0)) 
-            InfiniteIntegerLiteral(i1 mod i2) 
-          else 
+          else if(i2 != BigInt(0))
+            InfiniteIntegerLiteral(i1 mod i2)
+          else
             throw RuntimeError("Modulo of division by 0.")
         case (le,re) => throw EvalError(typeErrorMsg(le, IntegerType))
       }
@@ -349,21 +356,24 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
 
     case BVRemainder(l,r) =>
       (e(l), e(r)) match {
-        case (IntLiteral(i1), IntLiteral(i2)) => 
+        case (IntLiteral(i1), IntLiteral(i2)) =>
           if(i2 != 0) IntLiteral(i1 % i2) else throw RuntimeError("Remainder of division by 0.")
         case (le,re) => throw EvalError(typeErrorMsg(le, Int32Type))
       }
 
     case RealTimes(l,r) =>
       (e(l), e(r)) match {
-        case (RealLiteral(i1), RealLiteral(i2)) => RealLiteral(i1 * i2)
+        case (FractionalLiteral(ln, ld), FractionalLiteral(rn, rd)) =>
+          normalizeFraction(FractionalLiteral((ln * rn), (ld * rd)))
         case (le,re) => throw EvalError(typeErrorMsg(le, RealType))
       }
 
     case RealDivision(l,r) =>
       (e(l), e(r)) match {
-        case (RealLiteral(i1), RealLiteral(i2)) =>
-          if (i2 != 0) RealLiteral(i1 / i2) else throw RuntimeError("Division by 0.")
+        case (FractionalLiteral(ln, ld), FractionalLiteral(rn, rd)) =>
+          if (rn != 0)
+            normalizeFraction(FractionalLiteral((ln * rd), (ld * rn)))
+          else throw RuntimeError("Division by 0.")
         case (le,re) => throw EvalError(typeErrorMsg(le, RealType))
       }
 
@@ -408,7 +418,9 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       (e(l), e(r)) match {
         case (IntLiteral(i1), IntLiteral(i2)) => BooleanLiteral(i1 < i2)
         case (InfiniteIntegerLiteral(i1), InfiniteIntegerLiteral(i2)) => BooleanLiteral(i1 < i2)
-        case (RealLiteral(r1), RealLiteral(r2)) => BooleanLiteral(r1 < r2)
+        case (a @ FractionalLiteral(_, _), b @ FractionalLiteral(_, _)) =>
+           val FractionalLiteral(n, _) = e(RealMinus(a, b))
+           BooleanLiteral(n < 0)
         case (CharLiteral(c1), CharLiteral(c2)) => BooleanLiteral(c1 < c2)
         case (le,re) => throw EvalError(typeErrorMsg(le, Int32Type))
       }
@@ -417,7 +429,9 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       (e(l), e(r)) match {
         case (IntLiteral(i1), IntLiteral(i2)) => BooleanLiteral(i1 > i2)
         case (InfiniteIntegerLiteral(i1), InfiniteIntegerLiteral(i2)) => BooleanLiteral(i1 > i2)
-        case (RealLiteral(r1), RealLiteral(r2)) => BooleanLiteral(r1 > r2)
+        case (a @ FractionalLiteral(_, _), b @ FractionalLiteral(_, _)) =>
+           val FractionalLiteral(n, _) = e(RealMinus(a, b))
+           BooleanLiteral(n > 0)
         case (CharLiteral(c1), CharLiteral(c2)) => BooleanLiteral(c1 > c2)
         case (le,re) => throw EvalError(typeErrorMsg(le, Int32Type))
       }
@@ -426,7 +440,9 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       (e(l), e(r)) match {
         case (IntLiteral(i1), IntLiteral(i2)) => BooleanLiteral(i1 <= i2)
         case (InfiniteIntegerLiteral(i1), InfiniteIntegerLiteral(i2)) => BooleanLiteral(i1 <= i2)
-        case (RealLiteral(r1), RealLiteral(r2)) => BooleanLiteral(r1 <= r2)
+        case (a @ FractionalLiteral(_, _), b @ FractionalLiteral(_, _)) =>
+           val FractionalLiteral(n, _) = e(RealMinus(a, b))
+           BooleanLiteral(n <= 0)
         case (CharLiteral(c1), CharLiteral(c2)) => BooleanLiteral(c1 <= c2)
         case (le,re) => throw EvalError(typeErrorMsg(le, Int32Type))
       }
@@ -435,14 +451,16 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
       (e(l), e(r)) match {
         case (IntLiteral(i1), IntLiteral(i2)) => BooleanLiteral(i1 >= i2)
         case (InfiniteIntegerLiteral(i1), InfiniteIntegerLiteral(i2)) => BooleanLiteral(i1 >= i2)
-        case (RealLiteral(r1), RealLiteral(r2)) => BooleanLiteral(r1 >= r2)
+        case (a @ FractionalLiteral(_, _), b @ FractionalLiteral(_, _)) =>
+           val FractionalLiteral(n, _) = e(RealMinus(a, b))
+           BooleanLiteral(n >= 0)
         case (CharLiteral(c1), CharLiteral(c2)) => BooleanLiteral(c1 >= c2)
         case (le,re) => throw EvalError(typeErrorMsg(le, Int32Type))
       }
 
     case SetUnion(s1,s2) =>
       (e(s1), e(s2)) match {
-        case (f@FiniteSet(els1, _),FiniteSet(els2, _)) => 
+        case (f@FiniteSet(els1, _),FiniteSet(els2, _)) =>
           val SetType(tpe) = f.getType
           FiniteSet(els1 ++ els2, tpe)
         case (le,re) => throw EvalError(typeErrorMsg(le, s1.getType))
@@ -483,12 +501,75 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
         case _ => throw EvalError(typeErrorMsg(sr, SetType(Untyped)))
       }
 
-    case f @ FiniteSet(els, base) => 
+    case f @ FiniteSet(els, base) =>
       FiniteSet(els.map(e), base)
 
     case l @ Lambda(_, _) =>
-      val mapping = variablesOf(l).map(id => id -> e(Variable(id))).toMap
-      replaceFromIDs(mapping, l)
+      val (nl, structSubst) = normalizeStructure(l)
+      val mapping = variablesOf(l).map(id => structSubst(id) -> e(Variable(id))).toMap
+      replaceFromIDs(mapping, nl)
+
+    case PartialLambda(mapping, tpe) =>
+      PartialLambda(mapping.map(p => p._1.map(e) -> e(p._2)), tpe)
+
+    case f @ Forall(fargs, TopLevelAnds(conjuncts)) =>
+      val henkinModel: HenkinModel = gctx.model match {
+        case hm: HenkinModel => hm
+        case _ => throw EvalError("Can't evaluate foralls without henkin model")
+      }
+
+      e(andJoin(for (conj <- conjuncts) yield {
+        val vars = variablesOf(conj)
+        val args = fargs.map(_.id).filter(vars)
+        val quantified = args.toSet
+
+        val matcherQuorums = extractQuorums(conj, quantified)
+
+        val instantiations = matcherQuorums.flatMap { quorum =>
+          var mappings: Seq[(Identifier, Int, Int)] = Seq.empty
+          var constraints: Seq[(Expr, Int, Int)] = Seq.empty
+
+          for (((expr, args), qidx) <- quorum.zipWithIndex) {
+            val (qmappings, qconstraints) = args.zipWithIndex.partition {
+              case (Variable(id),aidx) => quantified(id)
+              case _ => false
+            }
+
+            mappings ++= qmappings.map(p => (p._1.asInstanceOf[Variable].id, qidx, p._2))
+            constraints ++= qconstraints.map(p => (p._1, qidx, p._2))
+          }
+
+          var equalities: Seq[((Int, Int), (Int, Int))] = Seq.empty
+          val mapping = for ((id, es) <- mappings.groupBy(_._1)) yield {
+            val base :: others = es.toList.map(p => (p._2, p._3))
+            equalities ++= others.map(p => base -> p)
+            (id -> base)
+          }
+
+          val argSets = quorum.foldLeft[List[Seq[Seq[Expr]]]](List(Seq.empty)) {
+            case (acc, (expr, _)) => acc.flatMap(s => henkinModel.domain(expr).map(d => s :+ d))
+          }
+
+          argSets.map { args =>
+            val argMap: Map[(Int, Int), Expr] = args.zipWithIndex.flatMap {
+              case (a, qidx) => a.zipWithIndex.map { case (e, aidx) => (qidx, aidx) -> e }
+            }.toMap
+
+            val map = mapping.map { case (id, key) => id -> argMap(key) }
+            val enabler = andJoin(constraints.map {
+              case (e, qidx, aidx) => Equals(e, argMap(qidx -> aidx))
+            } ++ equalities.map {
+              case (k1, k2) => Equals(argMap(k1), argMap(k2))
+            })
+
+            (enabler, map)
+          }
+        }
+
+        e(andJoin(instantiations.map { case (enabler, mapping) =>
+          e(Implies(enabler, conj))(rctx.withNewVars(mapping), gctx)
+        }))
+      }))
 
     case ArrayLength(a) =>
       val FiniteArray(_, _, IntLiteral(length)) = e(a)
@@ -516,12 +597,12 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
     case f @ FiniteArray(elems, default, length) =>
       val ArrayType(tp) = f.getType
       finiteArray(
-        elems.map(el => (el._1, e(el._2))), 
+        elems.map(el => (el._1, e(el._2))),
         default.map{ d => (e(d), e(length)) },
         tp
       )
 
-    case f @ FiniteMap(ss, kT, vT) => 
+    case f @ FiniteMap(ss, kT, vT) =>
       FiniteMap(ss.map{ case (k, v) => (e(k), e(v)) }.distinct, kT, vT)
 
     case g @ MapApply(m,k) => (e(m), e(k)) match {
@@ -548,7 +629,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
     case gv: GenericValue =>
       gv
 
-    case p : Passes => 
+    case p : Passes =>
       e(p.asConstraint)
 
     case choose: Choose =>
@@ -612,6 +693,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
           throw RuntimeError("MatchError: "+rscrut.asString+" did not match any of the cases")
       }
 
+    case fl : FractionalLiteral => normalizeFraction(fl)
     case l : Literal[_] => l
 
     case other =>
@@ -643,7 +725,7 @@ abstract class RecursiveEvaluator(ctx: LeonContext, prog: Program, maxSteps: Int
         } else {
           None
         }
-      case (up@UnapplyPattern(ob, _, subs), scrut) =>
+      case (up @ UnapplyPattern(ob, _, subs), scrut) =>
         e(FunctionInvocation(up.unapplyFun, Seq(scrut))) match {
           case CaseClass(CaseClassType(cd, _), Seq()) if cd == program.library.Nil.get =>
             None

@@ -26,12 +26,7 @@ import TypeOps._
 import xlang.Expressions.{Block => LeonBlock, _}
 import xlang.ExprOps._
 
-import utils.{
-  DefinedPosition,
-  Position       => LeonPosition,
-  OffsetPosition => LeonOffsetPosition,
-  RangePosition  => LeonRangePosition
-}
+import leon.utils.{Position => LeonPosition, OffsetPosition => LeonOffsetPosition, RangePosition => LeonRangePosition, Bijection, DefinedPosition}
 
 trait CodeExtraction extends ASTExtractors {
   self: LeonExtraction =>
@@ -144,7 +139,7 @@ trait CodeExtraction extends ASTExtractors {
 
     //This is a bit misleading, if an expr is not mapped then it has no owner, if it is mapped to None it means
     //that it can have any owner
-    private var owners: Map[Identifier, Option[FunDef]] = Map() 
+    private var owners: Map[Identifier, Option[FunDef]] = Map()
 
     // This one never fails, on error, it returns Untyped
     def leonType(tpt: Type)(implicit dctx: DefContext, pos: Position): LeonType = {
@@ -183,7 +178,7 @@ trait CodeExtraction extends ASTExtractors {
             ScalaUnit(name, pack, imps, lst, !isLibrary(u))
 
           case _ =>
-            outOfSubsetError(u.body, "Unnexpected Unit body")
+            outOfSubsetError(u.body, "Unexpected Unit body")
         }}
 
         // Phase 1, we discover and define objects/classes/types
@@ -384,7 +379,7 @@ trait CodeExtraction extends ASTExtractors {
       val allSels = sels map { prefix :+ _.name.toString }
 
       // Make a different import for each selector at the end of the chain
-      allSels flatMap { selectors => 
+      allSels flatMap { selectors =>
         assert(selectors.nonEmpty)
         val (thePath, isWild) = selectors.last match {
           case "_" => (selectors.dropRight(1), true)
@@ -453,8 +448,8 @@ trait CodeExtraction extends ASTExtractors {
     private var methodToClass = Map[FunDef, LeonClassDef]()
 
     /**
-     * For the function in $defs with name $owner, find its parameter with index $index, 
-     * and registers $fd as the default value function for this parameter.  
+     * For the function in $defs with name $owner, find its parameter with index $index,
+     * and registers $fd as the default value function for this parameter.
      */
     private def registerDefaultMethod(
       defs : List[Tree],
@@ -506,15 +501,33 @@ trait CodeExtraction extends ASTExtractors {
           None
       }
 
-      val cd = ( if (sym.isAbstractClass) {
+      // Extract class
+      val cd = if (sym.isAbstractClass) {
         AbstractClassDef(id, tparams, parent)
       } else  {
         CaseClassDef(id, tparams, parent, sym.isModuleClass)
-      }).setPos(sym.pos)
-      classesToClasses += sym -> cd
+      }
+      cd.setPos(sym.pos)
       //println(s"Registering $sym")
-      parent.foreach(_.classDef.registerChild(cd))
+      classesToClasses += sym -> cd
       cd.addFlags(annotationsOf(sym).map { case (name, args) => ClassFlag.fromName(name, args) }.toSet)
+
+      // Register parent
+      parent.foreach(_.classDef.registerChild(cd))
+
+      // Extract case class fields
+      cd match {
+        case ccd: CaseClassDef =>
+
+          val fields = args.map { case (fsym, t) =>
+            val tpe = leonType(t.tpt.tpe)(defCtx, fsym.pos)
+            val id = cachedWithOverrides(fsym, Some(ccd), tpe)
+            LeonValDef(id.setPos(t.pos), Some(tpe)).setPos(t.pos)
+          }
+          //println(s"Fields of $sym")
+          ccd.setFields(fields)
+        case _ =>
+      }
 
       // Validates type parameters
       parent foreach { pct =>
@@ -535,7 +548,7 @@ trait CodeExtraction extends ASTExtractors {
 
       //println(s"Body of $sym")
 
-      // We collect the methods and fields 
+      // We collect the methods and fields
       for (d <- tmpl.body) d match {
         case EmptyTree =>
           // ignore
@@ -562,7 +575,7 @@ trait CodeExtraction extends ASTExtractors {
 
           cd.registerMethod(fd)
           val matcher: PartialFunction[Tree, Symbol] = {
-            case ExFunctionDef(ownerSym, _ ,_ ,_, _) if ownerSym.name.toString == owner => ownerSym 
+            case ExFunctionDef(ownerSym, _ ,_ ,_, _) if ownerSym.name.toString == owner => ownerSym
           }
           registerDefaultMethod(tmpl.body, matcher, index, fd )
 
@@ -588,33 +601,21 @@ trait CodeExtraction extends ASTExtractors {
 
       }
 
-      cd match {
-        case ccd: CaseClassDef =>
-
-          val fields = args.map { case (fsym, t) =>
-            val tpe = leonType(t.tpt.tpe)(defCtx, fsym.pos)
-            val id = overridenOrFresh(fsym, Some(ccd), tpe)
-            LeonValDef(id.setPos(t.pos), Some(tpe)).setPos(t.pos)
-          }
-          //println(s"Fields of $sym")
-          ccd.setFields(fields)
-        case _ =>
-      }
+      //println(s"End body $sym")
 
       cd
     }
 
     // Returns the parent's method Identifier if sym overrides a symbol, otherwise a fresh Identifier
-    private def overridenOrFresh(sym: Symbol, within: Option[LeonClassDef], tpe: LeonType = Untyped) = {
-      val name = sym.name.toString
-      if (sym.overrideChain.length > 1) {
-        (for {
-          cd <- within
-          p <- cd.parent
-          m <- p.classDef.methods.find(_.id.name == name)
-        } yield m.id).getOrElse(FreshIdentifier(name, tpe))
-      } else {
-        FreshIdentifier(name, tpe)
+
+    private val funOrFieldSymsToIds = new Bijection[Symbol, Identifier]
+
+    private def cachedWithOverrides(sym: Symbol, within: Option[LeonClassDef], tpe: LeonType = Untyped) = {
+
+      val topOfHierarchy = sym.overrideChain.last
+
+      funOrFieldSymsToIds.cachedB(topOfHierarchy){
+        FreshIdentifier(sym.name.toString, tpe)
       }
     }
 
@@ -645,7 +646,7 @@ trait CodeExtraction extends ASTExtractors {
         else returnType
       }
 
-      val id = overridenOrFresh(sym, within, idType)
+      val id = cachedWithOverrides(sym, within, idType)
 
       val fd = new FunDef(id.setPos(sym.pos), tparamsDef, returnType, newParams)
 
@@ -670,7 +671,7 @@ trait CodeExtraction extends ASTExtractors {
 
       // @mk: We type the identifiers of methods during code extraction because
       // a possible implementing/overriding field will use this same Identifier
-      val id = overridenOrFresh(sym, within, returnType)
+      val id = cachedWithOverrides(sym, within, returnType)
       val fd = new FunDef(id.setPos(sym.pos), Seq(), returnType, Seq())
 
       fd.setPos(sym.pos)
@@ -764,7 +765,7 @@ trait CodeExtraction extends ASTExtractors {
 
       // Find defining function for params with default value
       for ((s,vd) <- params zip funDef.params) {
-        vd.defaultValue = paramsToDefaultValues.get(s.symbol) 
+        vd.defaultValue = paramsToDefaultValues.get(s.symbol)
       }
 
       val newVars = for ((s, vd) <- params zip funDef.params) yield {
@@ -774,7 +775,7 @@ trait CodeExtraction extends ASTExtractors {
       val fctx = dctx.withNewVars(newVars).copy(isExtern = funDef.annotations("extern"))
 
       // If this is a lazy field definition, drop the assignment/ accessing
-      val body = 
+      val body =
         if (funDef.flags.contains(IsField(true))) { body0 match {
           case Block(List(Assign(_, realBody)),_ ) => realBody
           case _ => outOfSubsetError(body0, "Wrong form of lazy accessor")
@@ -937,7 +938,7 @@ trait CodeExtraction extends ASTExtractors {
         val recGuard = extractTree(cd.guard)(ndctx)
 
         if(isXLang(recGuard)) {
-          outOfSubsetError(cd.guard.pos, "Guard expression must be pure") 
+          outOfSubsetError(cd.guard.pos, "Guard expression must be pure")
         }
 
         GuardedCase(recPattern, recGuard, recBody).setPos(cd.pos)
@@ -1109,7 +1110,7 @@ trait CodeExtraction extends ASTExtractors {
           LetDef(funDefWithBody, restTree)
 
         // FIXME case ExDefaultValueFunction
-        
+
         /**
          * XLang Extractors
          */
@@ -1217,7 +1218,7 @@ trait CodeExtraction extends ASTExtractors {
           rec match {
             case IntLiteral(n) =>
               InfiniteIntegerLiteral(BigInt(n))
-            case _ => 
+            case _ =>
               outOfSubsetError(tr, "Conversion from Int to BigInt")
           }
 
@@ -1226,7 +1227,7 @@ trait CodeExtraction extends ASTExtractors {
           val rd = extractTree(d)
           (rn, rd) match {
             case (InfiniteIntegerLiteral(n), InfiniteIntegerLiteral(d)) =>
-              RealLiteral(BigDecimal(n) / BigDecimal(d))
+              FractionalLiteral(n, d)
             case _ =>
               outOfSubsetError(tr, "Real not build from literals")
           }
@@ -1234,7 +1235,7 @@ trait CodeExtraction extends ASTExtractors {
           val rn = extractTree(n)
           rn match {
             case InfiniteIntegerLiteral(n) =>
-              RealLiteral(BigDecimal(n))
+              FractionalLiteral(n, 1)
             case _ =>
               outOfSubsetError(tr, "Real not build from literals")
           }
@@ -1310,6 +1311,22 @@ trait CodeExtraction extends ASTExtractors {
           val exBody = extractTree(body)(dctx.withNewVars(newVars))
 
           Lambda(vds, exBody)
+
+        case ExForallExpression(args, body) =>
+          val vds = args map { case (tpt, sym) =>
+            val aTpe = extractType(tpt)
+            val newID = FreshIdentifier(sym.name.toString, aTpe)
+            owners += (newID -> None)
+            LeonValDef(newID)
+          }
+
+          val newVars = (args zip vds).map { case ((_, sym), lvd) =>
+            sym -> (() => lvd.toVariable)
+          }
+
+          val exBody = extractTree(body)(dctx.withNewVars(newVars))
+
+          Forall(vds, exBody)
 
         case ExFiniteMap(tptFrom, tptTo, args) =>
           val singletons: Seq[(LeonExpr, LeonExpr)] = args.collect {
@@ -1465,7 +1482,7 @@ trait CodeExtraction extends ASTExtractors {
 
         case str @ ExStringLiteral(s) =>
           val chars = s.toList.map(CharLiteral)
-          
+
           val consChar = CaseClassType(libraryCaseClass(str.pos, "leon.collection.Cons"), Seq(CharType))
           val nilChar  = CaseClassType(libraryCaseClass(str.pos, "leon.collection.Nil"),  Seq(CharType))
 
@@ -1633,6 +1650,9 @@ trait CodeExtraction extends ASTExtractors {
             case (IsTyped(a1, at: ArrayType), "updated", List(k, v)) =>
               ArrayUpdated(a1, k, v)
 
+            case (IsTyped(a1, at: ArrayType), "clone", Nil) =>
+              a1
+
 
             // Map methods
             case (IsTyped(a1, MapType(_, vt)), "apply", List(a2)) =>
@@ -1790,11 +1810,11 @@ trait CodeExtraction extends ASTExtractors {
 
       case RefinedType(parents, defs) if defs.isEmpty =>
         /**
-         * For cases like if(a) e1 else e2 where 
+         * For cases like if(a) e1 else e2 where
          *   e1 <: C1,
          *   e2 <: C2,
          *   with C1,C2 <: C
-         * 
+         *
          * Scala might infer a type for C such as: Product with Serializable with C
          * we generalize to the first known type, e.g. C.
          */

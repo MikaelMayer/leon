@@ -260,7 +260,7 @@ object TypeOps {
               (LiteralPattern(newOb,lit), (ob zip newOb).toMap)
 
             case _ =>
-              sys.error("woot!?")
+              sys.error(s"woot!? $p:$expType")
           }
 
           (srec(e), cases.map(trCase))//.copiedFrom(m)
@@ -300,6 +300,14 @@ object TypeOps {
             val mapping = args.map(_.id) zip newArgs.map(_.id)
             Lambda(newArgs, rec(idsMap ++ mapping)(body)).copiedFrom(l)
 
+          case f @ Forall(args, body) =>
+            val newArgs = args.map { arg =>
+              val tpe = tpeSub(arg.getType)
+              ValDef(freshId(arg.id, tpe))
+            }
+            val mapping = args.map(_.id) zip newArgs.map(_.id)
+            Forall(newArgs, rec(idsMap ++ mapping)(body)).copiedFrom(f)
+
           case p @ Passes(in, out, cases) =>
             val (newIn, newCases) = onMatchLike(in, cases)
             passes(newIn, srec(out), newCases).copiedFrom(p)
@@ -311,6 +319,9 @@ object TypeOps {
           case Error(tpe, desc) =>
             Error(tpeSub(tpe), desc).copiedFrom(e)
           
+          case Hole(tpe, alts) =>
+            Hole(tpeSub(tpe), alts.map(srec)).copiedFrom(e)
+
           case g @ GenericValue(tpar, id) =>
             tpeSub(tpar) match {
               case newTpar : TypeParameter => 

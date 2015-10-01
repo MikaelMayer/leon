@@ -3,11 +3,18 @@
 package leon.utils
 
 import scala.collection.mutable.{Stack, Set => MSet}
+import scala.collection.mutable.Builder
+import scala.collection.{Iterable, IterableLike, GenSet}
 
-class IncrementalSet[A] extends IncrementalState {
+class IncrementalSet[A] extends IncrementalState
+                        with Iterable[A]
+                        with IterableLike[A, Set[A]]
+                        with Builder[A, IncrementalSet[A]] {
+
   private[this] val stack = new Stack[MSet[A]]()
+  override def repr = stack.flatten.toSet
 
-  def clear(): Unit = {
+  override def clear(): Unit = {
     stack.clear()
   }
 
@@ -24,15 +31,15 @@ class IncrementalSet[A] extends IncrementalState {
     stack.pop()
   }
 
-  def +=(a: A): Unit = {
-    stack.head += a
-  }
+  def apply(elem: A) = repr.contains(elem)
+  def contains(elem: A) = repr.contains(elem)
 
-  def ++=(as: Traversable[A]): Unit = {
-    stack.head ++= as
-  }
+  def iterator = stack.flatten.iterator
+  def += (elem: A) = { stack.head += elem; this }
+  def -= (elem: A) = { stack.foreach(_ -= elem); this }
 
-  def toSet = stack.toSet.flatten
+  override def newBuilder = new scala.collection.mutable.SetBuilder(Set.empty[A])
+  def result = this
 
   push()
 }
