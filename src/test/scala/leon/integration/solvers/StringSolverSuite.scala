@@ -155,6 +155,32 @@ class StringSolverSuite extends FunSuite with Matchers with ScalaFutures {
     )
   }
   
+  implicit class StringcontextVar(p: StringContext) {
+    def v(args: Identifier*): StringForm = {
+      val ids = args.map(Right.apply(_): StringFormToken)
+      val consts = p.parts.map(Left.apply(_): StringFormToken)
+      val res = ids.zip(consts).toList.map(tp => List(tp._1, tp._2)).flatten :+ consts.last
+      res.filter(Left("") == _)
+    }
+  }
+  
+  test("solveEllipsisProblem") {
+    implicit val kk = k
+    implicit def stringToStringform(s: String): StringForm = List(Left(s))
+    val idSource = () => u
+    
+    val problem1 = List("""z+"1"+x+"2"+x+"3"+x+"4"+y+w""" ==== """"[1, 2"+u+"]"""")
+    val problem2 = List("""z+"1"+x+"2"+x+"3"+x+"4"+w""" ==== """"[1,"+u+", 4]"""")
+    solveEllipsisProblem(problem1, idSource).toSet shouldEqual (Set(
+      PartialSolution(Map(x -> ", ", y -> "]", w -> "", z -> "["), List()),
+      PartialSolution(Map(x -> ", ", y -> "", w -> "]", z -> "["), List())
+    ): Set[PartialSolution])
+    solveEllipsisProblem(problem2, idSource).toSet should equal (Set(
+      PartialSolution(Map(x -> v",$u, ", w -> "]", z -> "["), List(u)),
+      PartialSolution(Map(x -> v", ", w -> "]", z -> "["), List(u))
+    ): Set[PartialSolution])
+  }
+  
   test("constantPropagate") {
     implicit val kk = k
     val complexString = "abcdefmlkjsdqfmlkjqezpijbmkqjsdfmijzmajmpqjmfldkqsjmkj"

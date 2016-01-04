@@ -626,4 +626,22 @@ object StringSolver {
       solveGeneralProblem(unbounded.map(reduceGeneralEquation(assignment)(_))).map(assignment ++ _)
     })
   }
+  
+  //////////////////////////////////////////////////////
+  //// Solving with ellipsis on the right-hand side ////
+  //////////////////////////////////////////////////////
+  
+  /* Prerequisite:
+   * 1) All variables to the right of the equation appear exactly once in the problem (no dependence)
+   * 2) The right of the equation must have at least one constant part. If there is no constant part, the equation is considered valid and is dropped.
+   * 3) We will not care about the value of the variables appearing to the right
+   */
+  
+  // Variables can be mapped to concatenation of constants and other unique variables
+  type PartialAssignment = Map[Identifier, StringForm]
+  
+  case class PartialSolution(assignment: PartialAssignment, introducedIds: List[Identifier])
+  
+  /** Returns also the newly introduced identifiers in the partial assignments*/
+  def solveEllipsisProblem(p: GeneralProblem, idSource: ()=>Identifier): Stream[PartialSolution] = ???
 }
