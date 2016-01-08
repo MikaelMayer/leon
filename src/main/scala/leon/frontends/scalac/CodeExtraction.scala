@@ -1508,9 +1508,6 @@ trait CodeExtraction extends ASTExtractors {
 
         case ExImplies(lhs, rhs) =>
           Implies(extractTree(lhs), extractTree(rhs)).setPos(current.pos)
-
-        case ExStringEscape(s) =>
-          StringEscape(extractTree(s))
           
         case c @ ExCall(rec, sym, tps, args) =>
           // The object on which it is called is null if the symbol sym is a valid function in the scope and not a method.
@@ -1749,9 +1746,6 @@ trait CodeExtraction extends ASTExtractors {
               val typea1 = a1.getType
               val typea2 = a2.map(_.getType).mkString(",")
               val sa2 = a2.mkString(",")
-              try {
-              println(Thread.currentThread().getStackTrace.take(5).mkString("\n"))
-              } catch { case e: Throwable => }
               outOfSubsetError(tr, "Unknown call to " + name + s" on $a1 ($typea1) with arguments $sa2 of type $typea2")
           }
 

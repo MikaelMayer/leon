@@ -200,14 +200,6 @@ trait ASTExtractors {
         case _ => None
       }
     }
-    
-    /** Matches a call to StrOps.escape */
-    object ExStringEscape {
-      def unapply(tree: Apply): Option[Tree] = tree match {
-        case Apply(ExSelected("leon", "lang", "StrOps", "escape"), List(arg)) => Some(arg)
-        case _ => None
-      }
-    }
 
     /** Extracts the 'require' contract from an expression (only if it's the
      * first call in the block). */
@@ -244,11 +236,9 @@ trait ASTExtractors {
     }
 
 
-    /** Returns a string literal either from leon.lang.string.String or from a constant string literal. */
+    /** Returns a string literal from a constant string literal. */
     object ExStringLiteral {
       def unapply(tree: Tree): Option[String] = tree  match {
-        case Apply(ExSelected("leon", "lang", "string", "package", "strToStr"), (str: Literal) :: Nil) =>
-          Some(str.value.stringValue)
         case Literal(c @ Constant(i)) if c.tpe == StringClass.tpe => 
           Some(c.stringValue)
         case _ =>
