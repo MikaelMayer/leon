@@ -2,29 +2,26 @@
  * Author: Larabot
  */
 import leon.lang._
+import leon.collection._
 import leon.annotation._
 import synthesis._
 
 object SynthesisChallenge {
-  sealed abstract class Colleague
-  case object PhD extends Colleague
-  case object PostDoc extends Colleague
-  case object Failed extends ((Colleague, Colleague) => Boolean) {
-    def apply(c: Colleague, d: Colleague) = c == PhD
+  case class PhDstudent(approvals: Set[PhDstudent])
+  
+  def approves(colleague: PhDstudent, candidate: PhDstudent): Boolean = {
+    colleague.approvals contains candidate
   }
-  case object Succeeded extends ((Colleague, Colleague) => Boolean) {
-    def apply(c: Colleague, d: Colleague) = c != PhD && d != PostDoc
+  
+  def approvePhD(colleagues: List[PhDstudent], candidate: PhDstudent): Boolean = colleagues match {
+    case Nil() => true
+    case Cons(colleague, tail) => approves(colleague, candidate) && approvePhD(tail, candidate)
   }
 
   /** Will Etienne obtain his PhD ?*/
-  def irremplacabilityLemma(etienne: Colleague) = {
-    choose((replacement: (Colleague, Colleague) => Boolean) =>
-	  replacement(etienne, PhD))
-  } ensuring {
-    (kneuss: (Colleague, Colleague) => Boolean) => (etienne, kneuss) passes {
-  	  case PhD => Succeeded
-  	  case PostDoc => Failed
-  	}
+  def approvals(etienne: PhDstudent): List[PhDstudent] = {
+    choose((colleagues: List[PhDstudent]) =>
+      approvePhD(colleagues, etienne) && colleagues.size > 7
+    )
   }
 }
-
